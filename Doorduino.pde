@@ -13,9 +13,6 @@
 // -- Found at http://www.arduino.cc/cgi-bin/yabb2/YaBB.pl?num=1198881858
 // -- by Jon McPhalen (www.jonmcphalen.com) -- based on work by others
 // -- 29 DEC 2007
-// SDA pin is Analog4
-// SCL pin is Analog5
-// Relay pin is Digital5
 
 // Parallax RFID demo
 // Modified by Worapoht K.
@@ -24,12 +21,21 @@
 // /ENABLE on Digital2
 
 #include <Wire.h>
-#include <SoftwareSerial.h>
+#include <NewSoftSerial.h>
 #include <EEPROM.h>
 #include <RFIDDB.h>
 
-// Door is on Digital 5
-#define RELAY       5
+////////////////////////////////////////////////////////////////////////////////
+
+// Hardware Setup //////////////////////////////////////////////////////////////
+#define RFID_DISABLE_PIN 2 // Digital pin connected to RFID reader /enable pin
+#define RFID_RX_PIN 3      // Digital pin for software RFID read
+
+#define DOOR_STRIKE_PIN 5  // Digital pin connected to the door strike
+
+#define OPEN_TIME_SECS 5   // Amount of time to open the door strike, in seconds
+
+// DS1307 Clock chip definitions ///////////////////////////////////////////////
 #define DS1307      0xD0 >> 1                   // shift required by Wire.h (silly...)
 
 // DS1307 clock registers
@@ -42,12 +48,6 @@
 #define R_YEAR      6
 #define R_SQW       7
 
-// RFID reader SOUT pin connected to Serial RX (pin 3) at 2400bps
-// /ENABLE on Digital2
-#define RFID_DISABLE 2
-#define RFID_RX 3
-#define RFID_TX 4
-
 // RTC reading vars
 byte second = 0x00;                             // default to 01 JAN 2007, midnight
 byte minute = 0x00;
@@ -58,58 +58,62 @@ byte  month = 0x01;
 byte   year = 0x07;
 byte   ctrl = 0x00;
 
-// RFID reader vars
-int  val = 0; 
-char code[10]; 
-int  bytesread = 0;
 
-// RFIDDB
+// RFIDDB interface to handle ID lookup, logging function
 RFIDDB rfiddb;
 
-// Admin flag
-boolean adminMode;
+// Software serial device to talk to RFID reader
+NewSoftSerial RFID(RFID_RX_PIN, 255);
+
 
 void setup()
 {
-  Wire.begin();
-  Serial.begin(9600);
-  
-  pinMode(RELAY, OUTPUT);
-  digitalWrite(RELAY, LOW);
-  
-  pinMode(RFID_DISABLE, OUTPUT);      // Set digital pin 2 as OUTPUT to connect it to the RFID /ENABLE pin 
-  digitalWrite(RFID_DISABLE, HIGH);   // Disable the RFID reader 
+  Wire.begin();            // I2C bus for the clock chip
+  Serial.begin(9600);      // Hardware RS232 for administrative access
+  RFID.begin(2400);        // Software RS232 for RFID reader
 
+  Serial.flush();
+  RFID.flush();
+
+  Serial.println("Starting...");
+
+  // Initialize the door stop
+  pinMode(DOOR_STRIKE_PIN, OUTPUT);
+  digitalWrite(DOOR_STRIKE_PIN, LOW);  // Keep the door locked
+
+  // And the RFID /enable pin
+  pinMode(RFID_DISABLE_PIN, OUTPUT);
+  digitalWrite(RFID_DISABLE_PIN, HIGH);   // Disable the RFID reader 
+
+  // Set up the RFID card database
   rfiddb = RFIDDB();
-  
-  adminMode = true;
-  Serial.println("Door is Ready");
+
+
+  digitalWrite(RFID_DISABLE_PIN, LOW);   // Activate the RFID reader 
+  Serial.println("RFID reader activated");
 }
 
 void loop()
 { 
-  if(adminMode) {
-    if(Serial.available() > 0){
-      handleCommand();
-    } else {
-      delay(10);
-    }
-  } else {
-      readTag(); // blocks
+  if (Serial.available() > 0){
+    char command = Serial.read();
+    handleAdministrativeCommand(command);
   }
-  
-  if(millis() > 10000){ // 10 seconds
-    adminMode = false;
-    digitalWrite(RFID_DISABLE, LOW);   // Activate the RFID reader 
+  if (RFID.available() > 0) {
+    readTag(); // blocks
   }
 }
 
-void handleCommand()
-{
-  char inByte = Serial.read();
-  switch(inByte){
+
+// Handle the administrator command menu
+// @command  U: Upload a new set of valid tags
+//           L: List valid tags
+//           T: Set the real time clock
+void handleAdministrativeCommand(char command)
+{ 
+  switch(command){
     case 'U':
-      Serial.println("Upload time!");
+      Serial.println("Begin upload:");
       rfiddb.readTags();
       break;
     case 'L':
@@ -121,10 +125,19 @@ void handleCommand()
   }
 }
 
+// RFID reader vars
+int  val = 0; 
+char code[10]; 
+int  bytesread = 0;
+
+// Read bytes from the RFID tag, and handle them appropriately
 void readTag()
 {
-  SoftwareSerial RFID = SoftwareSerial(RFID_RX, RFID_TX);
-  RFID.begin(2400);
+  // If there isn't data waiting on the RFID pin, balk
+  if (RFID.available() == 0) {
+    return;
+  }
+
   boolean allowed = 0;
   
   if((val = RFID.read()) == 10)
@@ -132,6 +145,7 @@ void readTag()
     bytesread = 0; 
     while(bytesread<10)
     {  // read 10 digit code 
+      while( RFID.available() == 0) {}
       val = RFID.read(); 
       if((val == 10)||(val == 13))
       {  // if header or stop bytes before the 10 digit reading 
@@ -154,8 +168,7 @@ void readTag()
     }
     bytesread = 0; 
     delay(500);                       // wait for a bit
-  } 
-
+  }
 }
 
 void logTag(boolean allowed)
@@ -175,21 +188,22 @@ void logTag(boolean allowed)
 void rejectTag()
 {
   for(int i = 0; i < 3; i++){
-    digitalWrite(RFID_DISABLE, HIGH);
+    digitalWrite(RFID_DISABLE_PIN, HIGH);
     delay(500);
-    digitalWrite(RFID_DISABLE, LOW);
+    digitalWrite(RFID_DISABLE_PIN, LOW);
     delay(500);  
   }
 }
 
 void openDoor()
 {
- 
-  digitalWrite(RELAY, HIGH);
-  digitalWrite(RFID_DISABLE, HIGH);
-  delay(5000);
-  digitalWrite(RELAY, LOW);
-  digitalWrite(RFID_DISABLE, LOW); 
+//  digitalWrite(RFID_DISABLE_PIN, HIGH);
+  digitalWrite(DOOR_STRIKE_PIN, HIGH);
+
+  delay(OPEN_TIME_SECS * 1000);
+
+  digitalWrite(DOOR_STRIKE_PIN, LOW);  
+//  digitalWrite(RFID_DISABLE_PIN, LOW); 
 }
 
 void printTime()
@@ -305,76 +319,21 @@ void printDec2(byte decVal)
 }
 
 
-void printDayName(byte d)
+char *dayNames[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+
+char *monthNames[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                      "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+
+// Print the day of the week.
+// @day    Week day. 0=Sunday to 6=Saturday.
+void printDayName(byte day)
 {
-  switch (d) {
-    case 1:
-      Serial.print("SUN");
-      break;
-    case 2:
-      Serial.print("MON");
-      break;
-    case 3:
-      Serial.print("TUE");
-      break;
-    case 4:
-      Serial.print("WED");
-      break;
-    case 5:
-      Serial.print("THU");
-      break;
-    case 6:
-      Serial.print("FRI");
-      break;
-    case 7:
-      Serial.print("SAT");
-      break;
-    default:
-      Serial.print("???");
-  }
+  Serial.print(dayNames[day]);
 }
 
-
-void printMonthName(byte m)
+// Print the month name.
+// @day    Week day. 0=Sunday to 6=Saturday.
+void printMonthName(byte month)
 {
-  switch (m) {
-    case 1:
-      Serial.print("JAN");
-      break;
-    case 2:
-      Serial.print("FEB");
-      break;
-    case 3:
-      Serial.print("MAR");
-      break;
-    case 4:
-      Serial.print("APR");
-      break;
-    case 5:
-      Serial.print("MAY");
-      break;
-    case 6:
-      Serial.print("JUN");
-      break;
-    case 7:
-      Serial.print("JUL");
-      break;
-    case 8:
-      Serial.print("AUG");
-      break;
-    case 9:
-      Serial.print("SEP");
-      break;
-    case 10:
-      Serial.print("OCT");
-      break;
-    case 11:
-      Serial.print("NOV");
-      break;
-    case 12:
-      Serial.print("DEC");
-      break;
-    default:
-      Serial.print("???");
-  }
+  Serial.print(monthNames[month]);
 }
