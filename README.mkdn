@@ -1,0 +1,6 @@
+Doorduino
+=========
+
+Doorduino is an Arduino-powered RFID-based door access control system.  The basic idea is that the Arduino listens to a Parallax RFID reader until a tag is detected.  When a tag is found, it is checked against a database of acceptable tags, stored in the Arduino's EEPROM memory.  If the tag is accepted, a relay is activated (unlocking the door) and the RFID reader is temporarily disabled (showing a green light) for 5 seconds.  If the tag is not accepted, the RFID reader is disabled and enabled a few times, causing its indicator to flash red/green. Either way, the event is logged via serial output (and in the future, logged to an SD card).
+
+Requires the RFIDDB library, available here: http://github.com/martymcguire/ArduinoRFIDDB
