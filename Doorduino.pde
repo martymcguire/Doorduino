@@ -70,8 +70,6 @@ typedef struct time {
   byte year;
 };
 
-time rtcTime;
-
 // RFIDDB interface to handle ID lookup, logging function
 RFIDDB rfiddb;
 
@@ -91,20 +89,6 @@ void log(char* message)
   Serial.print("] ");
   Serial.print(message);
   Serial.print("\n");
-}
-
-
-// Build a human-readable representation of the current time
-// @string  character array to put the time in, must be 20 bytes long
-void getTime(char* string)
-{
-  // Grab the latest time from the RTC
-  getClock();
-  
-  // And build a formatted string to represent it
-  sprintf(string, "20%02d/%02d/%02d %02d:%02d:%02d",
-                  rtcTime.year, rtcTime.month, rtcTime.day,
-                  rtcTime.hour, rtcTime.minute, rtcTime.second);
 }
 
   
@@ -223,16 +207,25 @@ void readTag()
       bytesread++;                   // ready to read next digit  
     } 
 
+    // if 10 digit read is complete
     if (bytesread == 10)
-    {  // if 10 digit read is complete 
-      getClock();
+    {
       allowed = rfiddb.validTag(code);
-      logAccessAttempt(code, allowed);
-
+      
+      char message[25+TAG_LENGTH];
+      
       if(allowed) {
+        sprintf(message, "GRANTED_ACCESS code=xxxxxxxxxx", code);
+        strncpy(&message[20], code, TAG_LENGTH);
+        log(message);
+
         openDoor();
       } 
       else {
+        sprintf(message, "DENIED_ACCESS code=xxxxxxxxxx", code);
+        strncpy(&message[19], code, TAG_LENGTH);
+        log(message);
+        
         rejectTag();
       }
     }
@@ -242,34 +235,6 @@ void readTag()
   }
 }
 
-
-// Log the tag access attempt
-// @code       10-byte access code
-// @allowed    True if the attempt succeeded, false otherwise
-void logAccessAttempt(char* code, boolean allowed)
-{
-  
-  if (allowed)
-  {
-    char message[] = "GRANTED_ACCESS code=xxxxxxxxxx";
-
-    for (int i = 0; i < 10; i++) {
-      message[i+20] = code[i];
-    }
-    
-    log(message);
-  }
-  else
-  {
-    char message[] = "DENIED_ACCESS code=xxxxxxxxxx";
-
-    for (int i = 0; i < 10; i++) {
-      message[i+19] = code[i];
-    }
-    
-    log(message);
-  }
-}
 
 void rejectTag()
 {
@@ -285,6 +250,7 @@ void rejectTag()
 
 void openDoor()
 {
+  // Open the door
   digitalWrite(RFID_DISABLE_PIN, HIGH);
   digitalWrite(DOOR_STRIKE_PIN, HIGH);
 
@@ -295,63 +261,78 @@ void openDoor()
 }
 
 
-void getClock()
+void readRTC(time& currentTime)
 {
   Wire.beginTransmission(DS1307);
   Wire.send(R_SECS);
   Wire.endTransmission();
   
   Wire.requestFrom(DS1307, 7);
-  rtcTime.second = bcd2Dec(Wire.receive());
-  rtcTime.minute = bcd2Dec(Wire.receive());
-  rtcTime.hour   = bcd2Dec(Wire.receive());
-  rtcTime.wkDay  = bcd2Dec(Wire.receive());
-  rtcTime.day    = bcd2Dec(Wire.receive());
-  rtcTime.month  = bcd2Dec(Wire.receive());
-  rtcTime.year   = bcd2Dec(Wire.receive());
+  currentTime.second = bcd2Dec(Wire.receive());
+  currentTime.minute = bcd2Dec(Wire.receive());
+  currentTime.hour   = bcd2Dec(Wire.receive());
+  currentTime.wkDay  = bcd2Dec(Wire.receive());
+  currentTime.day    = bcd2Dec(Wire.receive());
+  currentTime.month  = bcd2Dec(Wire.receive());
+  currentTime.year   = bcd2Dec(Wire.receive());
 }
 
 
-void setClock()
+void setRTC(time& newTime)
 {
   Wire.beginTransmission(DS1307);
   Wire.send(dec2Bcd(R_SECS));
-  Wire.send(dec2Bcd(rtcTime.second));
-  Wire.send(dec2Bcd(rtcTime.minute));
-  Wire.send(dec2Bcd(rtcTime.hour));
-  Wire.send(dec2Bcd(rtcTime.wkDay));
-  Wire.send(dec2Bcd(rtcTime.day));
-  Wire.send(dec2Bcd(rtcTime.month));
-  Wire.send(dec2Bcd(rtcTime.year));
+  Wire.send(dec2Bcd(newTime.second));
+  Wire.send(dec2Bcd(newTime.minute));
+  Wire.send(dec2Bcd(newTime.hour));
+  Wire.send(dec2Bcd(newTime.wkDay));
+  Wire.send(dec2Bcd(newTime.day));
+  Wire.send(dec2Bcd(newTime.month));
+  Wire.send(dec2Bcd(newTime.year));
   Wire.endTransmission();
 }
 
+
+// Build a human-readable representation of the current time
+// @string  character array to put the time in, must be 20 bytes long
+void getTime(char* string)
+{
+  // Grab the latest time from the RTC
+  time currentTime;
+  readRTC(currentTime);
+  
+  // And build a formatted string to represent it
+  sprintf(string, "20%02d/%02d/%02d %02d:%02d:%02d",
+                  currentTime.year, currentTime.month, currentTime.day,
+                  currentTime.hour, currentTime.minute, currentTime.second);
+}
+
+
 void setTimeFromSerial()
 {
+  time newTime;
+  
   char temp = 0;
 
   // Wait for full time to be received
   for (int i = 0; i < 7; i++)
   {
-    while (Serial.available() == 0) {
-    }
+    while (Serial.available() == 0) {}
 
     temp = Serial.read();
 
     switch (i) {
-      case 0: rtcTime.year = temp;    break;
-      case 1: rtcTime.month = temp;   break;
-      case 2: rtcTime.day = temp;     break;
-      case 3: rtcTime.wkDay = temp;   break;
-      case 4: rtcTime.hour = temp;    break;
-      case 5: rtcTime.minute = temp;  break;
-      case 6: rtcTime.second = temp;  break;
+      case 0: newTime.year = temp;    break;
+      case 1: newTime.month = temp;   break;
+      case 2: newTime.day = temp;     break;
+      case 3: newTime.wkDay = temp;   break;
+      case 4: newTime.hour = temp;    break;
+      case 5: newTime.minute = temp;  break;
+      case 6: newTime.second = temp;  break;
     }
-
-    i++;
   }
   
-  setClock();
+  setRTC(newTime);
   
   log("TIME_RESET");
 }
