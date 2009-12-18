@@ -60,15 +60,17 @@
 #define R_SQW       7
 
 // RTC reading vars
-byte second = 0x00;                             // default to 01 JAN 2007, midnight
-byte minute = 0x00;
-byte   hour = 0x00;
-byte  wkDay = 0x02;
-byte    day = 0x01;
-byte  month = 0x01;
-byte   year = 0x07;
-byte   ctrl = 0x00;
+typedef struct time {
+  byte second;
+  byte minute;
+  byte hour;
+  byte wkDay;
+  byte day;
+  byte month;
+  byte year;
+};
 
+time rtcTime;
 
 // RFIDDB interface to handle ID lookup, logging function
 RFIDDB rfiddb;
@@ -77,10 +79,39 @@ RFIDDB rfiddb;
 SoftwareSerial RFID =  SoftwareSerial(RFID_RX_PIN, RFID_TX_PIN);
 
 
+// Log a system message either to console or SD card
+void log(char* message)
+{
+  static char timeString[20];
+  getTime(timeString);
+  
+  // For now, just print it to the console
+  Serial.print("[");
+  Serial.print(timeString);
+  Serial.print("] ");
+  Serial.print(message);
+  Serial.print("\n");
+}
+
+
+// Build a human-readable representation of the current time
+// @string  character array to put the time in, must be 20 bytes long
+void getTime(char* string)
+{
+  // Grab the latest time from the RTC
+  getClock();
+  
+  // And build a formatted string to represent it
+  sprintf(string, "20%02d/%02d/%02d %02d:%02d:%02d",
+                  rtcTime.year, rtcTime.month, rtcTime.day,
+                  rtcTime.hour, rtcTime.minute, rtcTime.second);
+}
+
+  
 void setup()
 {
   Serial.begin(9600);      // Hardware RS232 for administrative access
-
+  
   Wire.begin();            // I2C bus for the clock chip
   
   pinMode(RFID_RX_PIN, INPUT);
@@ -97,8 +128,9 @@ void setup()
 
   // Set up the RFID card database
   rfiddb = RFIDDB();
-
-  Serial.println("Waiting for admin commands...");
+  
+  log("POWER_ON");
+  
   int count = millis() + 5000;
   while (millis() < count) {
     if (Serial.available() > 0){
@@ -109,8 +141,9 @@ void setup()
     }
   }
 
-  digitalWrite(RFID_DISABLE_PIN, LOW);   // Activate the RFID reader 
-  Serial.println("RFID reader activated");
+  digitalWrite(RFID_DISABLE_PIN, LOW);   // Activate the RFID reader
+  
+  log("ACTIVATE_READER");
 }
 
 void loop()
@@ -126,6 +159,10 @@ void loop()
 //           t: Check the current time
 void handleAdministrativeCommand(char command)
 {
+  char message[] = "GOT_COMMAND command=x";
+  message[20] = command;
+  log(message);
+  
   switch(command){
   case 'U':
     Serial.println("Begin upload:");
@@ -137,10 +174,22 @@ void handleAdministrativeCommand(char command)
   case 'T':
     setTimeFromSerial();
     break;
-  case 't':
-    printTime();
-    Serial.print("\n");
+  case 'r':
+    // for debugging, reset the clock to 0's
+    // TODO: Delete me
+    Wire.beginTransmission(DS1307);
+    Wire.send(dec2Bcd(R_SECS));
+    Wire.send(dec2Bcd(0));
+    Wire.send(dec2Bcd(0));
+    Wire.send(dec2Bcd(0));
+    Wire.send(dec2Bcd(0));
+    Wire.send(dec2Bcd(0));
+    Wire.send(dec2Bcd(0));
+    Wire.send(dec2Bcd(0));
+    Wire.endTransmission();
+    
     break;
+    
   default:
     Serial.println("? Command not understood.  Try U, L, T, t");
     break;
@@ -199,23 +248,27 @@ void readTag()
 // @allowed    True if the attempt succeeded, false otherwise
 void logAccessAttempt(char* code, boolean allowed)
 {
-  Serial.print("READ_TAG");
+  
+  if (allowed)
+  {
+    char message[] = "GRANTED_ACCESS code=xxxxxxxxxx";
 
-  Serial.print(" code=");   // possibly a good TAG 
-  for(int i = 0; i < 10; i++){ // print the TAG code
-    Serial.print(code[i]);
+    for (int i = 0; i < 10; i++) {
+      message[i+20] = code[i];
+    }
+    
+    log(message);
   }
+  else
+  {
+    char message[] = "DENIED_ACCESS code=xxxxxxxxxx";
 
-  if (allowed) {
-    Serial.print(" status=GRANTED");
+    for (int i = 0; i < 10; i++) {
+      message[i+19] = code[i];
+    }
+    
+    log(message);
   }
-  else {
-    Serial.print(" status=DENIED");
-  }
-
-  Serial.print(" time=");
-  printTime();
-  Serial.println();
 }
 
 void rejectTag()
@@ -241,35 +294,35 @@ void openDoor()
   digitalWrite(RFID_DISABLE_PIN, LOW);
 }
 
-void printTime()
-{
-  Serial.print("20");
-  printDec2(year);
-  Serial.print"/";
-  printDec2(month);
-  Serial.print"/";
-  printDec2(day);
 
-  Serial.print" ";
-  printDec2(hour);
-  Serial.print(":");
-  printDec2(minute);
-  Serial.print(":");
-  printHex2(second);
+void getClock()
+{
+  Wire.beginTransmission(DS1307);
+  Wire.send(R_SECS);
+  Wire.endTransmission();
+  
+  Wire.requestFrom(DS1307, 7);
+  rtcTime.second = bcd2Dec(Wire.receive());
+  rtcTime.minute = bcd2Dec(Wire.receive());
+  rtcTime.hour   = bcd2Dec(Wire.receive());
+  rtcTime.wkDay  = bcd2Dec(Wire.receive());
+  rtcTime.day    = bcd2Dec(Wire.receive());
+  rtcTime.month  = bcd2Dec(Wire.receive());
+  rtcTime.year   = bcd2Dec(Wire.receive());
 }
+
 
 void setClock()
 {
   Wire.beginTransmission(DS1307);
-  Wire.send(R_SECS);
-  Wire.send(second);
-  Wire.send(minute);
-  Wire.send(hour);
-  Wire.send(wkDay);
-  Wire.send(day);
-  Wire.send(month);
-  Wire.send(year);
-  Wire.send(ctrl);
+  Wire.send(dec2Bcd(R_SECS));
+  Wire.send(dec2Bcd(rtcTime.second));
+  Wire.send(dec2Bcd(rtcTime.minute));
+  Wire.send(dec2Bcd(rtcTime.hour));
+  Wire.send(dec2Bcd(rtcTime.wkDay));
+  Wire.send(dec2Bcd(rtcTime.day));
+  Wire.send(dec2Bcd(rtcTime.month));
+  Wire.send(dec2Bcd(rtcTime.year));
   Wire.endTransmission();
 }
 
@@ -283,42 +336,24 @@ void setTimeFromSerial()
     while (Serial.available() == 0) {
     }
 
-    temp = dec2Bcd(Serial.read());
+    temp = Serial.read();
 
     switch (i) {
-      case 0: year = temp;    break;
-      case 1: month = temp;   break;
-      case 2: day = temp;     break;
-      case 3: wkDay = temp;   break;
-      case 4: hour = temp;    break;
-      case 5: minute = temp;  break;
-      case 6: second = temp;  break;
+      case 0: rtcTime.year = temp;    break;
+      case 1: rtcTime.month = temp;   break;
+      case 2: rtcTime.day = temp;     break;
+      case 3: rtcTime.wkDay = temp;   break;
+      case 4: rtcTime.hour = temp;    break;
+      case 5: rtcTime.minute = temp;  break;
+      case 6: rtcTime.second = temp;  break;
     }
 
     i++;
   }
-
+  
   setClock();
-  getClock();
-  Serial.print("Time Set: ");
-  printTime();
-  Serial.println();
-}
-
-void getClock()
-{
-  Wire.beginTransmission(DS1307);
-  Wire.send(R_SECS);
-  Wire.endTransmission();
-  Wire.requestFrom(DS1307, 8);
-  second = Wire.receive();
-  minute = Wire.receive();
-  hour   = Wire.receive();
-  wkDay  = Wire.receive();
-  day    = Wire.receive();
-  month  = Wire.receive();
-  year   = Wire.receive();
-  ctrl   = Wire.receive();
+  
+  log("TIME_RESET");
 }
 
 
@@ -332,40 +367,3 @@ byte dec2Bcd(byte decVal)
   return decVal / 10 * 16 + decVal % 10;
 }
 
-
-void printHex2(byte hexVal)
-{
-  if (hexVal < 0x10)
-    Serial.print("0");
-  Serial.print(hexVal, HEX);
-}
-
-
-void printDec2(byte decVal)
-{
-  if (decVal < 10)
-    Serial.print("0");
-  Serial.print(decVal, DEC);
-}
-
-
-char *dayNames[] = {
-  "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-
-char *monthNames[] = {
-  "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-  "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-
-// Print the day of the week.
-// @day    Week day. 0=Sunday to 6=Saturday.
-void printDayName(byte day)
-{
-  Serial.print(dayNames[day]);
-}
-
-// Print the month name.
-// @day    Week day. 0=Sunday to 6=Saturday.
-void printMonthName(byte month)
-{
-  Serial.print(monthNames[month]);
-}
