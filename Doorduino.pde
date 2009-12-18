@@ -21,15 +21,26 @@
 // /ENABLE on Digital2
 
 #include <Wire.h>
-#include <NewSoftSerial.h>
-#include <EEPROM.h>
+#include <SoftwareSerial.h>
+
+#include <EEPROM.h>        // TODO: Put this in RFIDDB library?
 #include <RFIDDB.h>
 
-////////////////////////////////////////////////////////////////////////////////
+#if 0
+#include <FatStructs.h>
+#include <Fat16Config.h>
+#include <Fat16mainpage.h>
+#include <Fat16util.h>
+#include <SdInfo.h>
+#include <SdCard.h>
+#include <Fat16.h>
+#endif
+
 
 // Hardware Setup //////////////////////////////////////////////////////////////
 #define RFID_DISABLE_PIN 2 // Digital pin connected to RFID reader /enable pin
 #define RFID_RX_PIN 3      // Digital pin for software RFID read
+#define RFID_TX_PIN 4      // Unusued
 
 #define DOOR_STRIKE_PIN 5  // Digital pin connected to the door strike
 
@@ -63,19 +74,18 @@ byte   ctrl = 0x00;
 RFIDDB rfiddb;
 
 // Software serial device to talk to RFID reader
-NewSoftSerial RFID(RFID_RX_PIN, 255);
+SoftwareSerial RFID =  SoftwareSerial(RFID_RX_PIN, RFID_TX_PIN);
 
 
 void setup()
 {
-  Wire.begin();            // I2C bus for the clock chip
   Serial.begin(9600);      // Hardware RS232 for administrative access
+
+  Wire.begin();            // I2C bus for the clock chip
+  
+  pinMode(RFID_RX_PIN, INPUT);
+  pinMode(RFID_TX_PIN, OUTPUT);
   RFID.begin(2400);        // Software RS232 for RFID reader
-
-  Serial.flush();
-  RFID.flush();
-
-  Serial.println("Starting...");
 
   // Initialize the door stop
   pinMode(DOOR_STRIKE_PIN, OUTPUT);
@@ -88,20 +98,24 @@ void setup()
   // Set up the RFID card database
   rfiddb = RFIDDB();
 
+  Serial.println("Waiting for admin commands...");
+  int count = millis() + 5000;
+  while (millis() < count) {
+    if (Serial.available() > 0){
+      char command = Serial.read();
+      handleAdministrativeCommand(command);
+
+      count = millis() + 5000;
+    }
+  }
 
   digitalWrite(RFID_DISABLE_PIN, LOW);   // Activate the RFID reader 
   Serial.println("RFID reader activated");
 }
 
 void loop()
-{ 
-  if (Serial.available() > 0){
-    char command = Serial.read();
-    handleAdministrativeCommand(command);
-  }
-  if (RFID.available() > 0) {
-    readTag(); // blocks
-  }
+{  
+  readTag(); // blocks
 }
 
 
@@ -109,43 +123,48 @@ void loop()
 // @command  U: Upload a new set of valid tags
 //           L: List valid tags
 //           T: Set the real time clock
+//           t: Check the current time
 void handleAdministrativeCommand(char command)
-{ 
+{
   switch(command){
-    case 'U':
-      Serial.println("Begin upload:");
-      rfiddb.readTags();
-      break;
-    case 'L':
-      rfiddb.printTags();
-      break;
-    case 'T':
-      setTimeFromSerial();
-      break;
+  case 'U':
+    Serial.println("Begin upload:");
+    rfiddb.readTags();
+    break;
+  case 'L':
+    rfiddb.printTags();
+    break;
+  case 'T':
+    setTimeFromSerial();
+    break;
+  case 't':
+    printTime();
+    Serial.print("\n");
+    break;
+  default:
+    Serial.println("? Command not understood.  Try U, L, T, t");
+    break;
   }
 }
 
-// RFID reader vars
-int  val = 0; 
-char code[10]; 
-int  bytesread = 0;
 
 // Read bytes from the RFID tag, and handle them appropriately
 void readTag()
 {
-  // If there isn't data waiting on the RFID pin, balk
-  if (RFID.available() == 0) {
-    return;
-  }
+  int  val = 0;
+  int  bytesread = 0;
+  char code[10];
 
   boolean allowed = 0;
-  
-  if((val = RFID.read()) == 10)
-  {   // check for header 
+
+  val = RFID.read();
+
+  // If a proper header was received, start reading RFID tag
+  if (val == 10)
+  {
     bytesread = 0; 
-    while(bytesread<10)
+    while (bytesread < 10)
     {  // read 10 digit code 
-      while( RFID.available() == 0) {}
       val = RFID.read(); 
       if((val == 10)||(val == 13))
       {  // if header or stop bytes before the 10 digit reading 
@@ -155,72 +174,88 @@ void readTag()
       bytesread++;                   // ready to read next digit  
     } 
 
-    if(bytesread == 10)
+    if (bytesread == 10)
     {  // if 10 digit read is complete 
       getClock();
       allowed = rfiddb.validTag(code);
-      logTag(allowed);
+      logAccessAttempt(code, allowed);
+
       if(allowed) {
-         openDoor();
-      } else {
-         rejectTag();
+        openDoor();
+      } 
+      else {
+        rejectTag();
       }
     }
+
     bytesread = 0; 
     delay(500);                       // wait for a bit
   }
 }
 
-void logTag(boolean allowed)
+
+// Log the tag access attempt
+// @code       10-byte access code
+// @allowed    True if the attempt succeeded, false otherwise
+void logAccessAttempt(char* code, boolean allowed)
 {
-  Serial.print("TAG code ");   // possibly a good TAG 
+  Serial.print("READ_TAG");
+
+  Serial.print(" code=");   // possibly a good TAG 
   for(int i = 0; i < 10; i++){ // print the TAG code
-    Serial.print(code[i]);      
+    Serial.print(code[i]);
   }
-  if(allowed){ Serial.print(" GRANTED"); }
-  else {       Serial.print(" DENIED");  }
-      
-  Serial.print(" access at ");
+
+  if (allowed) {
+    Serial.print(" status=GRANTED");
+  }
+  else {
+    Serial.print(" status=DENIED");
+  }
+
+  Serial.print(" time=");
   printTime();
   Serial.println();
 }
 
 void rejectTag()
 {
+  // Flash the tag
   for(int i = 0; i < 3; i++){
     digitalWrite(RFID_DISABLE_PIN, HIGH);
     delay(500);
     digitalWrite(RFID_DISABLE_PIN, LOW);
     delay(500);  
   }
+
 }
 
 void openDoor()
 {
-//  digitalWrite(RFID_DISABLE_PIN, HIGH);
+  digitalWrite(RFID_DISABLE_PIN, HIGH);
   digitalWrite(DOOR_STRIKE_PIN, HIGH);
 
   delay(OPEN_TIME_SECS * 1000);
 
-  digitalWrite(DOOR_STRIKE_PIN, LOW);  
-//  digitalWrite(RFID_DISABLE_PIN, LOW); 
+  digitalWrite(DOOR_STRIKE_PIN, LOW);
+  digitalWrite(RFID_DISABLE_PIN, LOW);
 }
 
 void printTime()
 {
-  printHex2(hour);
+  Serial.print("20");
+  printDec2(year);
+  Serial.print"/";
+  printDec2(month);
+  Serial.print"/";
+  printDec2(day);
+
+  Serial.print" ";
+  printDec2(hour);
   Serial.print(":");
-  printHex2(minute);
+  printDec2(minute);
   Serial.print(":");
   printHex2(second);
-  Serial.print("  ");
-  printDayName(bcd2Dec(wkDay));
-  Serial.print("  ");
-  printHex2(day);
-  Serial.print(" ");
-  printMonthName(bcd2Dec(month));
-  Serial.print(" 20");
-  printHex2(year);
 }
 
 void setClock()
@@ -240,34 +275,29 @@ void setClock()
 
 void setTimeFromSerial()
 {
-  second = 255;
-  minute = 255;
-  hour   = 255;
-  wkDay  = 255;
-  day    = 255;
-  month  = 255;
-  year   = 255;
-  boolean done = false;
-  while(!done){
-    if(Serial.available() > 0){
-      if(year == 255){
-        year = dec2Bcd(Serial.read());
-      } else if (month == 255) {
-        month = dec2Bcd(Serial.read());
-      } else if (day == 255) {
-        day = dec2Bcd(Serial.read());
-      } else if (wkDay == 255) {
-        wkDay = dec2Bcd(Serial.read() + 1);
-      } else if (hour == 255) {
-        hour = dec2Bcd(Serial.read());
-      } else if (minute == 255) {
-        minute = dec2Bcd(Serial.read());
-      } else {
-        second = dec2Bcd(Serial.read());
-        done = true;
-      }
+  char temp = 0;
+
+  // Wait for full time to be received
+  for (int i = 0; i < 7; i++)
+  {
+    while (Serial.available() == 0) {
     }
+
+    temp = dec2Bcd(Serial.read());
+
+    switch (i) {
+      case 0: year = temp;    break;
+      case 1: month = temp;   break;
+      case 2: day = temp;     break;
+      case 3: wkDay = temp;   break;
+      case 4: hour = temp;    break;
+      case 5: minute = temp;  break;
+      case 6: second = temp;  break;
+    }
+
+    i++;
   }
+
   setClock();
   getClock();
   Serial.print("Time Set: ");
@@ -319,10 +349,12 @@ void printDec2(byte decVal)
 }
 
 
-char *dayNames[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+char *dayNames[] = {
+  "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
 
-char *monthNames[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-                      "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+char *monthNames[] = {
+  "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+  "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
 
 // Print the day of the week.
 // @day    Week day. 0=Sunday to 6=Saturday.
