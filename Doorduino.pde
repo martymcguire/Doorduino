@@ -24,18 +24,20 @@
 #include <SoftwareSerial.h>
 
 #include <EEPROM.h>        // TODO: Put this in RFIDDB library?
-#include <RFIDDB.h>
 
-#if 0
-#include <FatStructs.h>
-#include <Fat16Config.h>
-#include <Fat16mainpage.h>
-#include <Fat16util.h>
-#include <SdInfo.h>
-#include <SdCard.h>
-#include <Fat16.h>
+#define USE_RFIDDB
+
+#ifdef USE_RFIDDB
+#include <RFIDDB.h>
+#else 
+#define TAG_LENGTH 10
 #endif
 
+#include <Fat16.h>
+#include <Fat16util.h> // use functions to print strings from flash memory
+
+SdCard card;
+Fat16 file;
 
 // Hardware Setup //////////////////////////////////////////////////////////////
 #define RFID_DISABLE_PIN 2 // Digital pin connected to RFID reader /enable pin
@@ -70,16 +72,32 @@ typedef struct time {
   byte year;
 };
 
+#ifdef USE_RFIDDB
 // RFIDDB interface to handle ID lookup, logging function
 RFIDDB rfiddb;
+#endif
 
 // Software serial device to talk to RFID reader
 SoftwareSerial RFID =  SoftwareSerial(RFID_RX_PIN, RFID_TX_PIN);
 
+// Hokey shit, destroy
+// store error strings in flash to save RAM
+#define error(s) error_P(PSTR(s))
+void error_P(const char *str)
+{
+  PgmPrint("error: ");
+  SerialPrintln_P(str);
+  if (card.errorCode) {
+    PgmPrint("SD error: ");
+    Serial.println(card.errorCode, HEX);
+  }
+  while(1);
+}
+
 
 // Log a system message either to console or SD card
 void log(char* message)
-{
+{ 
   static char timeString[20];
   getTime(timeString);
   
@@ -89,13 +107,37 @@ void log(char* message)
   Serial.print("] ");
   Serial.print(message);
   Serial.print("\n");
+  
+  file.print("[");
+  file.print(timeString);
+  file.print("] ");
+  file.print(message);
+  file.print("\n");
+  
+  if (!file.sync()) {
+    Serial.print("Error logging to SD Card");
+  }
 }
 
   
 void setup()
 {
   Serial.begin(9600);      // Hardware RS232 for administrative access
+
+  Serial.print("Starting");
+  Serial.print("\n");
+
+
+  // initialize the SD card
+  if (!card.init()) error("card.init");
   
+  // initialize a FAT16 volume
+  if (!Fat16::init(card)) error("Fat16::init");
+  
+  // create a new file
+  file.open("ACCESS.LOG", O_CREAT | O_APPEND | O_WRITE);
+  if (!file.isOpen()) error ("create");
+
   Wire.begin();            // I2C bus for the clock chip
   
   pinMode(RFID_RX_PIN, INPUT);
@@ -110,9 +152,11 @@ void setup()
   pinMode(RFID_DISABLE_PIN, OUTPUT);
   digitalWrite(RFID_DISABLE_PIN, HIGH);   // Disable the RFID reader 
 
+#ifdef USE_RFIDDB
   // Set up the RFID card database
   rfiddb = RFIDDB();
-  
+#endif  
+    
   log("POWER_ON");
   
   int count = millis() + 5000;
@@ -150,10 +194,14 @@ void handleAdministrativeCommand(char command)
   switch(command){
   case 'U':
     Serial.println("Begin upload:");
+#ifdef USE_RFIDDB
     rfiddb.readTags();
+#endif
     break;
   case 'L':
+#ifdef USE_RFIDDB
     rfiddb.printTags();
+#endif
     break;
   case 'T':
     setTimeFromSerial();
@@ -210,8 +258,12 @@ void readTag()
     // if 10 digit read is complete
     if (bytesread == 10)
     {
+#ifdef USE_RFIDDB
       allowed = rfiddb.validTag(code);
-      
+#else
+      allowed = true;
+#endif
+
       char message[25+TAG_LENGTH];
       
       if(allowed) {
@@ -247,6 +299,7 @@ void rejectTag()
   }
 
 }
+
 
 void openDoor()
 {
