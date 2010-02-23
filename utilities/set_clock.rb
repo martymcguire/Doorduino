@@ -8,7 +8,7 @@ puts "Connecting to Arduino on #{ARGV[0]}"
 SerialPort.open(ARGV[0], 9600, 8, 1, SerialPort::NONE) do |sp|
   sleep 5
   puts "Connected?"
-  buf = ""; while (! /.* Ready\r\n/.match(buf)) do 
+  buf = ""; while (! /.* POWER_ON\n/.match(buf)) do 
     printf("%c", t = sp.getc)
     buf << t
   end
