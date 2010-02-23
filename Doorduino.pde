@@ -33,6 +33,9 @@
 SdCard card;
 Fat16 file;
 
+// Firmware version ////////////////////////////////////////////////////////////
+const char versionString[] = ".1";
+
 // Hardware Setup //////////////////////////////////////////////////////////////
 #define RFID_DISABLE_PIN 2 // Digital pin connected to RFID reader /enable pin
 #define RFID_RX_PIN 3      // Digital pin for software RFID read
@@ -45,15 +48,8 @@ Fat16 file;
 // DS1307 Clock chip definitions ///////////////////////////////////////////////
 #define DS1307      0xD0 >> 1                   // shift required by Wire.h (silly...)
 
-// DS1307 clock registers
 #define R_SECS      0
-#define R_MINS      1
-#define R_HRS       2
-#define R_WKDAY     3
-#define R_DATE      4
-#define R_MONTH     5
-#define R_YEAR      6
-#define R_SQW       7
+
 
 // RTC reading vars
 typedef struct time {
@@ -146,8 +142,10 @@ void setup()
 
   // Set up the RFID card database
   rfiddb = RFIDDB();
-    
-  log("POWER_ON");
+  
+  char message[] = "POWER_ON version=        ";
+  strncpy(&message[17],versionString,(sizeof(versionString)<=8)?sizeof(versionString):8);
+  log(message);
   
   int count = millis() + 5000;
   while (millis() < count) {
@@ -184,16 +182,18 @@ void handleAdministrativeCommand(char command)
   case 'U':
     Serial.println("Begin upload:");
     rfiddb.readTags();
+    // TODO: write new tag ids to log?
+    log("TAGS_RELOADED");
     break;
   case 'L':
     rfiddb.printTags();
     break;
   case 'T':
     setTimeFromSerial();
+    log("TIME_RESET");
     break;
   default:
-//    Serial.println("? Command not understood.  Try U, L, T");
-    Serial.println("?");
+    Serial.println("? Command not understood.  Try U, L, T");
     break;
   }
 }
@@ -352,8 +352,6 @@ void setTimeFromSerial()
   }
   
   setRTC(newTime);
-  
-  log("TIME_RESET");
 }
 
 
