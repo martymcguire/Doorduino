@@ -25,13 +25,7 @@
 
 #include <EEPROM.h>        // TODO: Put this in RFIDDB library?
 
-#define USE_RFIDDB
-
-#ifdef USE_RFIDDB
 #include <RFIDDB.h>
-#else 
-#define TAG_LENGTH 10
-#endif
 
 #include <Fat16.h>
 #include <Fat16util.h> // use functions to print strings from flash memory
@@ -72,10 +66,8 @@ typedef struct time {
   byte year;
 };
 
-#ifdef USE_RFIDDB
 // RFIDDB interface to handle ID lookup, logging function
 RFIDDB rfiddb;
-#endif
 
 // Software serial device to talk to RFID reader
 SoftwareSerial RFID =  SoftwareSerial(RFID_RX_PIN, RFID_TX_PIN);
@@ -152,10 +144,8 @@ void setup()
   pinMode(RFID_DISABLE_PIN, OUTPUT);
   digitalWrite(RFID_DISABLE_PIN, HIGH);   // Disable the RFID reader 
 
-#ifdef USE_RFIDDB
   // Set up the RFID card database
   rfiddb = RFIDDB();
-#endif  
     
   log("POWER_ON");
   
@@ -184,7 +174,6 @@ void loop()
 // @command  U: Upload a new set of valid tags
 //           L: List valid tags
 //           T: Set the real time clock
-//           t: Check the current time
 void handleAdministrativeCommand(char command)
 {
   char message[] = "GOT_COMMAND command=x";
@@ -194,36 +183,17 @@ void handleAdministrativeCommand(char command)
   switch(command){
   case 'U':
     Serial.println("Begin upload:");
-#ifdef USE_RFIDDB
     rfiddb.readTags();
-#endif
     break;
   case 'L':
-#ifdef USE_RFIDDB
     rfiddb.printTags();
-#endif
     break;
   case 'T':
     setTimeFromSerial();
     break;
-  case 'r':
-    // for debugging, reset the clock to 0's
-    // TODO: Delete me
-    Wire.beginTransmission(DS1307);
-    Wire.send(dec2Bcd(R_SECS));
-    Wire.send(dec2Bcd(0));
-    Wire.send(dec2Bcd(0));
-    Wire.send(dec2Bcd(0));
-    Wire.send(dec2Bcd(0));
-    Wire.send(dec2Bcd(0));
-    Wire.send(dec2Bcd(0));
-    Wire.send(dec2Bcd(0));
-    Wire.endTransmission();
-    
-    break;
-    
   default:
-    Serial.println("? Command not understood.  Try U, L, T, t");
+//    Serial.println("? Command not understood.  Try U, L, T");
+    Serial.println("?");
     break;
   }
 }
@@ -258,11 +228,7 @@ void readTag()
     // if 10 digit read is complete
     if (bytesread == 10)
     {
-#ifdef USE_RFIDDB
       allowed = rfiddb.validTag(code);
-#else
-      allowed = true;
-#endif
 
       char message[25+TAG_LENGTH];
       
