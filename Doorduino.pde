@@ -27,12 +27,6 @@
 
 #include <RFIDDB.h>
 
-#include <Fat16.h>
-#include <Fat16util.h> // use functions to print strings from flash memory
-
-SdCard card;
-Fat16 file;
-
 // Firmware version ////////////////////////////////////////////////////////////
 const char versionString[] = ".1";
 
@@ -68,63 +62,26 @@ RFIDDB rfiddb;
 // Software serial device to talk to RFID reader
 SoftwareSerial RFID =  SoftwareSerial(RFID_RX_PIN, RFID_TX_PIN);
 
-// Hokey shit, destroy
-// store error strings in flash to save RAM
-#define error(s) error_P(PSTR(s))
-void error_P(const char *str)
-{
-  PgmPrint("error: ");
-  SerialPrintln_P(str);
-  if (card.errorCode) {
-    PgmPrint("SD error: ");
-    Serial.println(card.errorCode, HEX);
-  }
-  while(1);
-}
 
-
-// Log a system message either to console or SD card
+// Log a system message to console
 void log(char* message)
 { 
   static char timeString[20];
   getTime(timeString);
   
-  // For now, just print it to the console
   Serial.print("[");
   Serial.print(timeString);
-  Serial.print("] ");
-  Serial.print(message);
-  Serial.print("\n");
+  Serial.print("] DOOR: ");
+  Serial.println(message);
   
-  file.print("[");
-  file.print(timeString);
-  file.print("] ");
-  file.print(message);
-  file.print("\n");
-  
-  if (!file.sync()) {
-    Serial.print("Error logging to SD Card");
-  }
 }
 
   
 void setup()
 {
-  Serial.begin(9600);      // Hardware RS232 for administrative access
+  Serial.begin(115200);      // Hardware RS232 for administrative access
 
-  Serial.print("Starting");
-  Serial.print("\n");
-
-
-  // initialize the SD card
-  if (!card.init()) error("card.init");
-  
-  // initialize a FAT16 volume
-  if (!Fat16::init(card)) error("Fat16::init");
-  
-  // create a new file
-  file.open("ACCESS.LOG", O_CREAT | O_APPEND | O_WRITE);
-  if (!file.isOpen()) error ("create");
+  Serial.println("[0000-00-00T00:00:00Z] DOOR: booting");
 
   Wire.begin();            // I2C bus for the clock chip
   
@@ -143,8 +100,8 @@ void setup()
   // Set up the RFID card database
   rfiddb = RFIDDB();
   
-  char message[] = "POWER_ON version=        ";
-  strncpy(&message[17],versionString,(sizeof(versionString)<=8)?sizeof(versionString):8);
+  char message[] = "power_on version=        ";
+  strncpy(&message[19],versionString,(sizeof(versionString)<=8)?sizeof(versionString):8);
   log(message);
   
   int count = millis() + 5000;
@@ -159,7 +116,7 @@ void setup()
 
   digitalWrite(RFID_DISABLE_PIN, LOW);   // Activate the RFID reader
   
-  log("ACTIVATE_READER");
+  log("ready");
 }
 
 void loop()
@@ -174,23 +131,23 @@ void loop()
 //           T: Set the real time clock
 void handleAdministrativeCommand(char command)
 {
-  char message[] = "GOT_COMMAND command=x";
+  char message[] = "got_command command=x";
   message[20] = command;
   log(message);
   
   switch(command){
   case 'U':
-    Serial.println("Begin upload:");
+    // Serial.println("Begin upload:");
     rfiddb.readTags();
     // TODO: write new tag ids to log?
-    log("TAGS_RELOADED");
+    log("tags_reloaded");
     break;
   case 'L':
     rfiddb.printTags();
     break;
   case 'T':
     setTimeFromSerial();
-    log("TIME_RESET");
+    log("time_rese");
     break;
   default:
     Serial.println("? Command not understood.  Try U, L, T");
@@ -233,15 +190,15 @@ void readTag()
       char message[25+TAG_LENGTH];
       
       if(allowed) {
-        sprintf(message, "GRANTED_ACCESS code=xxxxxxxxxx", code);
-        strncpy(&message[20], code, TAG_LENGTH);
+        sprintf(message, "accepted xxxxxxxxxx", code);
+        strncpy(&message[9], code, TAG_LENGTH);
         log(message);
 
         openDoor();
       } 
       else {
-        sprintf(message, "DENIED_ACCESS code=xxxxxxxxxx", code);
-        strncpy(&message[19], code, TAG_LENGTH);
+        sprintf(message, "rejected xxxxxxxxxx", code);
+        strncpy(&message[9], code, TAG_LENGTH);
         log(message);
         
         rejectTag();
@@ -321,7 +278,7 @@ void getTime(char* string)
   readRTC(currentTime);
   
   // And build a formatted string to represent it
-  sprintf(string, "20%02d/%02d/%02d %02d:%02d:%02d",
+  sprintf(string, "20%02d-%02d-%02dT%02d:%02d:%02dZ",
                   currentTime.year, currentTime.month, currentTime.day,
                   currentTime.hour, currentTime.minute, currentTime.second);
 }
